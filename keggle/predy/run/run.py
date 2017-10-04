@@ -1,4 +1,5 @@
 from time import time
+from sklearn.decomposition import PCA
 from sklearn.ensemble import GradientBoostingClassifier as Model
 import numpy as np
 
@@ -40,6 +41,14 @@ def norm_gini(predicted, expected):
     return calculate_gini(expected, predicted) / calculate_gini(expected, expected)
 
 
+def compute_sparse(data):
+    result = np.zeros((len(data[0])), float)
+    for row in data:
+        result += np.asarray(np.array(row == -1), int)
+
+    return np.array((result / len(data)) * 100, int)
+
+
 class Estimator(object):
 
     def __init__(self, model):
@@ -57,26 +66,60 @@ class Estimator(object):
         return self.model.__str__().split('(')[0]
 
 
-def main():
-    start = time()
-    train_data = load_data('../../data/train.csv')
-    test_data = load_data('../../data/test.csv', False)
-    print('\tLoad data took: %.3f sec.' % (time() - start))
+def add_extra_columns_to_train(train_data, addition):
+    for i in range(len(addition[0])):
+        for j in range(len(addition[0])):
+            temp = addition[:, i] * addition[:, j]
+            train_data = np.insert(train_data, 0, temp, 1)
 
-    estimator = Estimator(Model())
+    return train_data
+
+
+def add_extra_columns_to_test(test_data, addition):
+    for i in range(len(addition[0])):
+        for j in range(len(addition[0])):
+            temp = addition[:, i] * addition[:, j]
+            test_data = np.insert(test_data, 1, temp, 1)
+
+    return test_data
+
+
+def run(train_data, test_data, estimator):
+    start = time()
     estimator.fit(train_data)
     test_ans = estimator.predict(train_data)
 
     # gini computing for training_set
     gini = norm_gini(test_ans, train_data[:, -1])
-    print('Test data gini coefficient: %f' % gini)
+    print('Training data gini coefficient: %f' % gini)
+    # 3 add -
+    # 0 add -
+    # 0 add (exp) -
 
     # test data submission
     submission_answers = estimator.predict(test_data)
-    create_submission(test_data[:, 0], submission_answers, estimator.name())
+    create_submission(test_data[:, 0], submission_answers, estimator.name() + str(time()))
     print('Submission took: %.3f sec.' % (time() - start))
 
 
-if __name__ == '__main__':
-    main()
+def main(comp):
+    train_data = load_data('../../data/train.csv')
+    test_data = load_data('../../data/test.csv', False)
 
+    pca_train = PCA(n_components=comp)
+    pca_train.fit(train_data[:, :-1])
+    imp_train_data = pca_train.transform(train_data[:, :-1])
+    train_data = add_extra_columns_to_train(train_data, imp_train_data)
+
+    pca_test = PCA(n_components=comp)
+    pca_test.fit(test_data[:, 1:])
+    imp_test_data = pca_test.transform(test_data[:, 1:])
+    test_data = add_extra_columns_to_test(test_data, imp_test_data)
+
+    run(train_data, test_data, Estimator(Model(verbose=True)))
+
+
+if __name__ == '__main__':
+    main(0)
+    main(3)
+    main(10)
