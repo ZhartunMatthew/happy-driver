@@ -1,5 +1,4 @@
 from time import time
-from sklearn.ensemble import GradientBoostingClassifier as Model
 import numpy as np
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
@@ -8,10 +7,11 @@ from sklearn.model_selection import train_test_split
 def load_data(path, train=True):
     with open(path) as input_file:
         output_data = []
+        names = []
         for line in input_file:
             values = line.split(',')
-            # used to skip first line with column names
             if not values[0].isdigit():
+                names = values[2:] + [values[1]] if train else values
                 continue
 
             temp_list = [float(x) for x in values[2:]] + [float(values[1])] if train else [float(x) for x in values]
@@ -19,7 +19,7 @@ def load_data(path, train=True):
 
     print('Input data info.')
     print('\tVariable amount: %d, training set size %d' % (len(output_data[0]) - 1, len(output_data)))
-    return np.array(output_data)
+    return np.array(output_data), names
 
 
 def create_submission(labels, answers, file_name):
@@ -39,73 +39,61 @@ def gini(actual, predicted):
     return gini_sum / len(actual)
 
 
-def gini_xgb(predicted, expected):
+def compute_gini(predicted, expected):
     expected = expected.get_label()
     return 'gini', gini(expected, predicted) / gini(expected, expected)
 
 
-class Estimator(object):
-
-    def __init__(self, model):
-        self.model = model
-
-    def fit(self, data):
-        x = data[:, :-1]
-        y = data[:,  -1]
-        self.model.fit(x, y)
-
-    def predict(self, data):
-        return self.model.predict_proba(data[:, 1:])[:, 1]
-
-    def name(self):
-        return self.model.__str__().split('(')[0]
-
-
-class XEstimator(object):
+class XGBEstimator(object):
 
     def __init__(self):
-        self.params = {
-                       'eta': 0.02, 'max_depth': 4,
+        self.params = {'eta': 0.02, 'max_depth': 4,
                        'subsample': 0.9, 'colsample_bytree': 0.9,
                        'objective': 'binary:logistic',
-                       'eval_metric': 'auc', 'seed': 99,
-                       'silent': True}
+                       'eval_metric': 'auc', 'silent': True, 'seed': 99}
 
         self.model = None
+        self.iterations = 0
 
-    def fit(self, data):
+    def fit(self, data, iterations=200):
         x = data[:, :-1]
         y = data[:,  -1]
 
-        x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.25, random_state=99)
-        self.model = xgb.train(self.params,
-                               xgb.DMatrix(x, label=y),
-                               5000,
-                               [(xgb.DMatrix(x_train, y_train), 'train'), (xgb.DMatrix(x_test, y_test), 'valid')],
-                               feval=gini_xgb,
-                               maximize=True,
-                               verbose_eval=10)
+        self.iterations = iterations
+
+        x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.25, shuffle=True, random_state=99)
+
+        self.model = xgb.train(self.params, xgb.DMatrix(x, label=y), self.iterations,
+                               [(xgb.DMatrix(x_train, y_train), 'train'), (xgb.DMatrix(x_test, y_test), 'test')],
+                               feval=compute_gini, maximize=True, verbose_eval=10)
 
     def predict(self, data):
         return self.model.predict(xgb.DMatrix(data[:, 1:]))
 
     def name(self):
-        return self.model.__str__().split('(')[0]
+        return 'xgboost_%d' % self.iterations
 
 
 def run(train_data, test_data, estimator):
     start = time()
-    estimator.fit(train_data)
+    estimator.fit(train_data, 1000)
 
     submission_answers = estimator.predict(test_data)
-    create_submission(test_data[:, 0], submission_answers, 'submission')
+    create_submission(test_data[:, 0], submission_answers, '_%s' % estimator.name())
     print('Submission took: %.3f sec.' % (time() - start))
 
 
 def main():
-    train_data = load_data('../../data/train.csv')
-    test_data = load_data('../../data/test.csv', False)
-    run(train_data, test_data, XEstimator())
+    print('Loading')
+    train_data, train_names = load_data('../../data/train.csv')
+    test_data, test_names = load_data('../../data/test.csv', False)
+
+    # deleting unnecessary calculated field (it will increase gini score)
+    train_data = np.delete(train_data, [i for i in range(len(train_names)) if train_names[i].startswith('ps_calc_')], 1)
+    test_data = np.delete(test_data, [i for i in range(len(test_names)) if test_names[i].startswith('ps_calc_')], 1)
+
+    print('Predicting')
+    run(train_data, test_data, XGBEstimator())
 
 
 if __name__ == '__main__':
